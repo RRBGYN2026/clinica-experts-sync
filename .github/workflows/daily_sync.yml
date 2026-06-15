@@ -1,0 +1,71 @@
+name: Daily Clinica Experts Sync
+
+on:
+  schedule:
+    # 09:00 UTC = 06:00 BRT (Brasilia Time, UTC-3)
+    - cron: "0 9 * * *"
+
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "Date to sync (YYYY-MM-DD). Leave blank for yesterday."
+        required: false
+        default: ""
+
+jobs:
+  sync:
+    name: Sync & Reconcile
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run sync
+        env:
+          CLINICA_EXPERTS_API_KEY: ${{ secrets.CLINICA_EXPERTS_API_KEY }}
+        run: |
+          if [ -n "${{ github.event.inputs.date }}" ]; then
+            python sync.py --date "${{ github.event.inputs.date }}"
+          else
+            python sync.py
+          fi
+
+      - name: Commit updated database
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/clinica_experts.db
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            SYNC_DATE="${{ github.event.inputs.date }}"
+            if [ -z "$SYNC_DATE" ]; then
+              SYNC_DATE=$(date -d "yesterday" +%Y-%m-%d 2>/dev/null || date -v-1d +%Y-%m-%d)
+            fi
+            git commit -m "chore: sync Clinica Experts data for ${SYNC_DATE} [skip ci]"
+            git push
+          fi
+
+      - name: Upload database artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinica-experts-db-${{ github.run_id }}
+          path: data/clinica_experts.db
+          retention-days: 30
